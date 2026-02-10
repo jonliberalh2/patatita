@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Patatita - San Valentín</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #1a0a2e;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      overflow: hidden;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+    #gameContainer {
+      position: relative;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 0 40px rgba(255, 100, 150, 0.3);
+    }
+    canvas {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <div id="gameContainer">
+    <canvas id="gameCanvas"></canvas>
+  </div>
+
+  <script>
+    // ============================================================
+    // PATATITA — A Flappy Potato Valentine's Game
+    // ============================================================
+
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // Game dimensions
+    const W = 480;
+    const H = 640;
+    canvas.width = W;
+    canvas.height = H;
+
+    // ---- Game State ----
+    const TOTAL_PIPES = 10;
+    const PIPE_GAP = 210;          // vertical gap between top & bottom pipe
+    const PIPE_WIDTH = 70;
+    const PIPE_SPACING = 340;      // horizontal distance between pipes
+    const GRAVITY = 0.3;
+    const JUMP_FORCE = -6.5;
+    const PIPE_SPEED = 2;
+
+    let state = 'start'; // start | playing | cruise | win | celebrate | lose
+    let potato, pipes, score, particles, hearts, bgOffset;
+    let winTimer = 0;
+    let cruiseTimer = 0;
+    let celebrateTimer = 0;
+    const CRUISE_DURATION = 180; // ~3 seconds of free flying after last pipe
+    let celebrationStarted = false;
+
+    // ---- Canvas Buttons (Yes / No) ----
+    let mouseX = -999, mouseY = -999;
+    const btnYes = { x: 0, y: 0, w: 120, h: 50, visible: false };
+    const btnNo = { x: 0, y: 0, w: 120, h: 50, visible: false, targetX: 0, targetY: 0 };
+    let buttonsShown = false;
+
+    // ---- Load Images ----
+    const imgLluna = new Image();
+    imgLluna.src = 'logos/LLUNA.png';
+    const imgJon = new Image();
+    imgJon.src = 'logos/JONP.png';
+
+    // Track loading
+    let imagesLoaded = 0;
+    const totalImages = 2;
+    imgLluna.onload = () => { imagesLoaded++; };
+    imgJon.onload = () => { imagesLoaded++; };
+
+    // ---- Helpers ----
+    function lerp(a, b, t) { return a + (b - a) * t; }
+    function rand(min, max) { return Math.random() * (max - min) + min; }
+
+    // ---- Draw Potato using PNG ----
+    function drawPotatoImg(img, x, y, w, h, angle) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle || 0);
+      ctx.drawImage(img, -w / 2, -h / 2, w, h);
+      ctx.restore();
+    }
+
+    // ---- Draw Pipe (green tube) ----
+    function drawPipe(x, topH, bottomY) {
+      // Top pipe
+      const topGrad = ctx.createLinearGradient(x, 0, x + PIPE_WIDTH, 0);
+      topGrad.addColorStop(0, '#2d8a2d');
+      topGrad.addColorStop(0.3, '#4caf50');
+      topGrad.addColorStop(0.7, '#4caf50');
+      topGrad.addColorStop(1, '#2d8a2d');
+
+      ctx.fillStyle = topGrad;
+      ctx.fillRect(x, 0, PIPE_WIDTH, topH);
+      // Top pipe cap
+      ctx.fillStyle = topGrad;
+      ctx.fillRect(x - 5, topH - 25, PIPE_WIDTH + 10, 25);
+      ctx.strokeStyle = '#1a5e1a';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x - 5, topH - 25, PIPE_WIDTH + 10, 25);
+      ctx.strokeRect(x, 0, PIPE_WIDTH, topH - 25);
+
+      // Bottom pipe
+      const bH = H - bottomY;
+      ctx.fillStyle = topGrad;
+      ctx.fillRect(x, bottomY, PIPE_WIDTH, bH);
+      // Bottom pipe cap
+      ctx.fillRect(x - 5, bottomY, PIPE_WIDTH + 10, 25);
+      ctx.strokeStyle = '#1a5e1a';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x - 5, bottomY, PIPE_WIDTH + 10, 25);
+      ctx.strokeRect(x, bottomY + 25, PIPE_WIDTH, bH - 25);
+    }
+
+    // ---- Draw Heart ----
+    function drawHeart(x, y, size, color) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.fillStyle = color || '#ff4466';
+      ctx.beginPath();
+      ctx.moveTo(0, size * 0.3);
+      ctx.bezierCurveTo(-size * 0.5, -size * 0.3, -size, size * 0.1, 0, size);
+      ctx.bezierCurveTo(size, size * 0.1, size * 0.5, -size * 0.3, 0, size * 0.3);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // ---- Background ----
+    function drawBackground() {
+      // Sky gradient
+      const skyGrad = ctx.createLinearGradient(0, 0, 0, H);
+      skyGrad.addColorStop(0, '#87CEEB');
+      skyGrad.addColorStop(0.6, '#E0F0FF');
+      skyGrad.addColorStop(1, '#90EE90');
+      ctx.fillStyle = skyGrad;
+      ctx.fillRect(0, 0, W, H);
+
+      // Clouds
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      const cloudX = ((bgOffset * 0.3) % (W + 200)) - 100;
+      drawCloud(W - cloudX, 80, 1);
+      drawCloud(W - (cloudX + 300) % (W + 200), 140, 0.7);
+      drawCloud(W - (cloudX + 150) % (W + 200), 50, 0.5);
+
+      // Ground
+      const groundGrad = ctx.createLinearGradient(0, H - 60, 0, H);
+      groundGrad.addColorStop(0, '#7cba3f');
+      groundGrad.addColorStop(0.3, '#5a9a2a');
+      groundGrad.addColorStop(1, '#3d7a1a');
+      ctx.fillStyle = groundGrad;
+      ctx.fillRect(0, H - 60, W, 60);
+
+      // Ground line
+      ctx.strokeStyle = '#4a8a2a';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, H - 60);
+      ctx.lineTo(W, H - 60);
+      ctx.stroke();
+
+      // Little grass tufts
+      ctx.strokeStyle = '#5a9a2a';
+      ctx.lineWidth = 2;
+      for (let i = 0; i < W; i += 20) {
+        const gx = (i + bgOffset * 0.5) % W;
+        ctx.beginPath();
+        ctx.moveTo(gx, H - 60);
+        ctx.lineTo(gx - 3, H - 68);
+        ctx.moveTo(gx, H - 60);
+        ctx.lineTo(gx + 3, H - 70);
+        ctx.stroke();
+      }
+    }
+
+    function drawCloud(x, y, scale) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.scale(scale, scale);
+      ctx.beginPath();
+      ctx.arc(0, 0, 30, 0, Math.PI * 2);
+      ctx.arc(30, -10, 25, 0, Math.PI * 2);
+      ctx.arc(55, 0, 30, 0, Math.PI * 2);
+      ctx.arc(25, 10, 20, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // ---- Particle System ----
+    function spawnParticles(x, y, count, color) {
+      for (let i = 0; i < count; i++) {
+        particles.push({
+          x, y,
+          vx: rand(-3, 3),
+          vy: rand(-5, -1),
+          life: rand(30, 60),
+          maxLife: 60,
+          size: rand(2, 5),
+          color: color || `hsl(${rand(0, 60)}, 80%, 60%)`,
+        });
+      }
+    }
+
+    function spawnHearts(x, y, count) {
+      for (let i = 0; i < count; i++) {
+        hearts.push({
+          x: x + rand(-30, 30),
+          y,
+          vy: rand(-2, -0.5),
+          vx: rand(-0.5, 0.5),
+          life: rand(60, 120),
+          maxLife: 120,
+          size: rand(8, 18),
+          rotation: rand(-0.3, 0.3),
+          color: ['#ff4466', '#ff6688', '#ff3355', '#ff88aa'][Math.floor(rand(0, 4))],
+        });
+      }
+    }
+
+    function updateParticles() {
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += 0.1;
+        p.life--;
+        if (p.life <= 0) particles.splice(i, 1);
+      }
+      for (let i = hearts.length - 1; i >= 0; i--) {
+        const h = hearts[i];
+        h.x += h.vx;
+        h.y += h.vy;
+        h.life--;
+        if (h.life <= 0) hearts.splice(i, 1);
+      }
+    }
+
+    function drawParticles() {
+      particles.forEach(p => {
+        const alpha = p.life / p.maxLife;
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      ctx.globalAlpha = 1;
+
+      hearts.forEach(h => {
+        const alpha = h.life / h.maxLife;
+        ctx.globalAlpha = alpha;
+        drawHeart(h.x, h.y, h.size, h.color);
+      });
+      ctx.globalAlpha = 1;
+    }
+
+    // ---- Initialize ----
+    function init() {
+      potato = {
+        x: 80,
+        y: H / 2,
+        w: 55,
+        h: 65,
+        vy: 0,
+        angle: 0,
+      };
+      pipes = [];
+      score = 0;
+      particles = [];
+      hearts = [];
+      bgOffset = 0;
+      winTimer = 0;
+      cruiseTimer = 0;
+      celebrateTimer = 0;
+      celebrationStarted = false;
+      buttonsShown = false;
+      btnYes.visible = false;
+      btnNo.visible = false;
+
+      // Generate pipes
+      for (let i = 0; i < TOTAL_PIPES; i++) {
+        const x = W + 200 + i * PIPE_SPACING;
+        const minTop = 80;
+        const maxTop = H - 60 - PIPE_GAP - 80;
+        const topH = rand(minTop, maxTop);
+        pipes.push({
+          x,
+          topH,
+          bottomY: topH + PIPE_GAP,
+          scored: false,
+        });
+      }
+    }
+
+    // ---- Update ----
+    function update() {
+      if (state === 'playing') {
+        // Potato physics
+        potato.vy += GRAVITY;
+        potato.y += potato.vy;
+        potato.angle = Math.min(Math.max(potato.vy * 0.04, -0.5), 0.7);
+
+        // Move pipes
+        pipes.forEach(p => {
+          p.x -= PIPE_SPEED;
+        });
+        bgOffset += PIPE_SPEED;
+
+        // Check scoring
+        pipes.forEach(p => {
+          if (!p.scored && p.x + PIPE_WIDTH < potato.x) {
+            p.scored = true;
+            score++;
+            spawnParticles(potato.x, potato.y, 5, '#FFD700');
+          }
+        });
+
+        // Collision detection
+        const potatoLeft = potato.x - potato.w / 2 + 5;
+        const potatoRight = potato.x + potato.w / 2 - 5;
+        const potatoTop = potato.y - potato.h / 2 + 5;
+        const potatoBottom = potato.y + potato.h / 2 - 5;
+
+        // Ground / ceiling
+        if (potatoBottom > H - 60 || potatoTop < 0) {
+          state = 'lose';
+          spawnParticles(potato.x, potato.y, 20, '#a07828');
+          return;
+        }
+
+        // Pipe collision
+        for (const p of pipes) {
+          if (potatoRight > p.x && potatoLeft < p.x + PIPE_WIDTH) {
+            if (potatoTop < p.topH || potatoBottom > p.bottomY) {
+              state = 'lose';
+              spawnParticles(potato.x, potato.y, 20, '#a07828');
+              return;
+            }
+          }
+        }
+
+        // Cruise condition: passed all pipes — keep flying freely
+        if (score >= TOTAL_PIPES && state !== 'cruise') {
+          state = 'cruise';
+          cruiseTimer = 0;
+        }
+      }
+
+      if (state === 'cruise') {
+        cruiseTimer++;
+        // Potato still flies with physics (player keeps tapping)
+        potato.vy += GRAVITY;
+        potato.y += potato.vy;
+        potato.angle = Math.min(Math.max(potato.vy * 0.04, -0.5), 0.7);
+
+        // Keep scrolling background
+        bgOffset += PIPE_SPEED;
+
+        // Move remaining pipes offscreen
+        pipes.forEach(p => {
+          p.x -= PIPE_SPEED;
+        });
+
+        // Clamp to ground/ceiling so they don't die during cruise
+        if (potato.y + potato.h / 2 > H - 60) {
+          potato.y = H - 60 - potato.h / 2;
+          potato.vy = 0;
+        }
+        if (potato.y - potato.h / 2 < 0) {
+          potato.y = potato.h / 2;
+          potato.vy = 0;
+        }
+
+        // After cruise duration, trigger win
+        if (cruiseTimer >= CRUISE_DURATION) {
+          state = 'win';
+        }
+      }
+
+      if (state === 'win') {
+        winTimer++;
+        bgOffset += Math.max(0, PIPE_SPEED - winTimer * 0.02);
+
+        // Gently move potato to center
+        potato.y = lerp(potato.y, H / 2 - 60, 0.03);
+        potato.x = lerp(potato.x, W / 2 - 60, 0.02);
+        potato.vy *= 0.9;
+        potato.angle = lerp(potato.angle, 0, 0.05);
+
+        // Move remaining pipes offscreen
+        pipes.forEach(p => {
+          p.x -= 2;
+        });
+
+        // Show buttons after text appears
+        if (winTimer > 160 && !buttonsShown) {
+          buttonsShown = true;
+          btnYes.visible = true;
+          btnNo.visible = true;
+          btnYes.x = W / 2 - 140;
+          btnYes.y = H / 2 + 130;
+          btnNo.x = W / 2 + 20;
+          btnNo.y = H / 2 + 130;
+          btnNo.targetX = btnNo.x;
+          btnNo.targetY = btnNo.y;
+        }
+
+        // Make No button flee from mouse
+        if (btnNo.visible) {
+          const noCenterX = btnNo.x + btnNo.w / 2;
+          const noCenterY = btnNo.y + btnNo.h / 2;
+          const dx = mouseX - noCenterX;
+          const dy = mouseY - noCenterY;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          const fleeRadius = 80;
+
+          if (dist < fleeRadius && dist > 0) {
+            // Push target away from mouse
+            const force = (fleeRadius - dist) / fleeRadius * 12;
+            btnNo.targetX -= (dx / dist) * force;
+            btnNo.targetY -= (dy / dist) * force;
+
+            // Keep within canvas bounds
+            btnNo.targetX = Math.max(5, Math.min(W - btnNo.w - 5, btnNo.targetX));
+            btnNo.targetY = Math.max(H / 2 + 80, Math.min(H - btnNo.h - 10, btnNo.targetY));
+          }
+
+          // Smooth movement towards target
+          btnNo.x = lerp(btnNo.x, btnNo.targetX, 0.15);
+          btnNo.y = lerp(btnNo.y, btnNo.targetY, 0.15);
+        }
+      }
+
+      if (state === 'celebrate') {
+        celebrateTimer++;
+        bgOffset += 0.5;
+
+        // Both potatoes bob and jump
+        const jumpCycle = Math.sin(celebrateTimer * 0.15) * 12;
+        potato.y = H / 2 - 60 + jumpCycle;
+        potato.x = lerp(potato.x, W / 2 - 45, 0.05);
+        potato.angle = Math.sin(celebrateTimer * 0.1) * 0.15;
+
+        // Constant heart rain
+        if (celebrateTimer % 4 === 0) {
+          spawnHearts(rand(50, W - 50), rand(0, H / 3), 3);
+        }
+        if (celebrateTimer % 12 === 0) {
+          spawnParticles(potato.x, potato.y - 20, 3, '#FFD700');
+          spawnParticles(W / 2 + 45, H / 2 - 60 + jumpCycle - 20, 3, '#FFD700');
+        }
+      }
+
+      updateParticles();
+    }
+
+    // ---- Draw ----
+    function draw() {
+      drawBackground();
+
+      // Draw pipes
+      if (state === 'cruise' || state === 'playing' || (state === 'win' && winTimer < 60) || state === 'lose') {
+        pipes.forEach(p => {
+          if (p.x > -PIPE_WIDTH && p.x < W + PIPE_WIDTH) {
+            drawPipe(p.x, p.topH, p.bottomY);
+          }
+        });
+      }
+
+      // Draw particles below potatoes
+      drawParticles();
+
+      // Draw Lluna (the flying potato — player)
+      if (imagesLoaded >= totalImages) {
+        drawPotatoImg(imgLluna, potato.x, potato.y, potato.w, potato.h, potato.angle);
+      }
+
+      // Draw Jon (the waiting potato) on win / celebrate
+      if ((state === 'win' && winTimer > 30) || state === 'celebrate') {
+        const p2Alpha = state === 'celebrate' ? 1 : Math.min((winTimer - 30) / 40, 1);
+        ctx.globalAlpha = p2Alpha;
+        const bobble = state === 'celebrate'
+          ? Math.sin(celebrateTimer * 0.15) * 12
+          : Math.sin(winTimer * 0.08) * 3;
+        const jonX = state === 'celebrate' ? W / 2 + 45 : W / 2 + 60;
+        const jonAngle = state === 'celebrate' ? Math.sin(celebrateTimer * 0.1 + 1) * 0.15 : 0;
+        if (imagesLoaded >= totalImages) {
+          drawPotatoImg(imgJon, jonX, H / 2 - 60 + bobble, 55, 65, jonAngle);
+        }
+        ctx.globalAlpha = 1;
+
+        // Draw a little heart between them
+        const heartTimer = state === 'celebrate' ? 999 : winTimer;
+        if (heartTimer > 80) {
+          const heartAlpha = state === 'celebrate' ? 1 : Math.min((winTimer - 80) / 30, 1);
+          ctx.globalAlpha = heartAlpha;
+          const t = state === 'celebrate' ? celebrateTimer : winTimer;
+          const heartBob = Math.sin(t * 0.06) * 4;
+          drawHeart(W / 2, H / 2 - 110 + heartBob, 20, '#ff4466');
+          ctx.globalAlpha = 1;
+        }
+      }
+
+      // Score
+      if (state === 'playing' || state === 'cruise') {
+        ctx.fillStyle = '#fff';
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 4;
+        ctx.font = 'bold 48px "Segoe UI", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.strokeText(score + '/' + TOTAL_PIPES, W / 2, 60);
+        ctx.fillText(score + '/' + TOTAL_PIPES, W / 2, 60);
+      }
+
+      // Start screen
+      if (state === 'start') {
+        // Dim overlay
+        ctx.fillStyle = 'rgba(0,0,0,0.2)';
+        ctx.fillRect(0, 0, W, H);
+
+        // Bobbing potato
+        potato.y = H / 2 + Math.sin(Date.now() * 0.003) * 15;
+
+        ctx.fillStyle = '#fff';
+        ctx.strokeStyle = '#555';
+        ctx.lineWidth = 3;
+        ctx.font = 'bold 36px "Segoe UI", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.strokeText('Patatita Voladora', W / 2, 130);
+        ctx.fillText('Patatita Voladora', W / 2, 130);
+
+        // Draw Lluna on start screen (no spoilers!)
+        if (imagesLoaded >= totalImages) {
+          const bob1 = Math.sin(Date.now() * 0.003) * 5;
+          drawPotatoImg(imgLluna, W / 2, 210 + bob1, 70, 82, 0);
+        }
+
+        ctx.fillStyle = '#fff';
+        ctx.strokeStyle = '#555';
+        ctx.font = '20px "Segoe UI", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.lineWidth = 2;
+        ctx.strokeText('Toca o pulsa ESPACIO para volar', W / 2, H - 120);
+        ctx.fillText('Toca o pulsa ESPACIO para volar', W / 2, H - 120);
+
+        // Small hearts decorating
+        drawHeart(W / 2 - 140, 110, 12, '#ff6688');
+        drawHeart(W / 2 + 140, 110, 12, '#ff6688');
+      }
+
+      // Lose screen
+      if (state === 'lose') {
+        ctx.fillStyle = 'rgba(0,0,0,0.4)';
+        ctx.fillRect(0, 0, W, H);
+
+        ctx.fillStyle = '#fff';
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 4;
+        ctx.font = 'bold 40px "Segoe UI", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.strokeText('Oh no!', W / 2, H / 2 - 40);
+        ctx.fillText('Oh no!', W / 2, H / 2 - 40);
+
+        ctx.font = '22px "Segoe UI", sans-serif';
+        ctx.lineWidth = 2;
+        ctx.strokeText('Puntuación: ' + score + '/' + TOTAL_PIPES, W / 2, H / 2 + 10);
+        ctx.fillText('Puntuación: ' + score + '/' + TOTAL_PIPES, W / 2, H / 2 + 10);
+
+        ctx.font = '18px "Segoe UI", sans-serif';
+        ctx.strokeText('Toca para intentar de nuevo', W / 2, H / 2 + 60);
+        ctx.fillText('Toca para intentar de nuevo', W / 2, H / 2 + 60);
+      }
+
+      // Win screen text + buttons
+      if (state === 'win' && winTimer > 100) {
+        const textAlpha = Math.min((winTimer - 100) / 50, 1);
+        ctx.globalAlpha = textAlpha;
+
+        // Background card
+        const cardW = 430;
+        const cardH = 110;
+        const cardX = W / 2 - cardW / 2;
+        const cardY = H / 2 + 10;
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
+        roundRect(ctx, cardX, cardY, cardW, cardH, 16);
+        ctx.fill();
+
+        ctx.strokeStyle = '#ff4466';
+        ctx.lineWidth = 3;
+        roundRect(ctx, cardX, cardY, cardW, cardH, 16);
+        ctx.stroke();
+
+        ctx.fillStyle = '#cc2244';
+        ctx.font = 'bold 18px "Segoe UI", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Bieen! Lo conseguiste amor!', W / 2, cardY + 35);
+        ctx.fillText('¿Quieres ser mi patatita', W / 2, cardY + 65);
+        ctx.fillText('por San Valentín?', W / 2, cardY + 92);
+
+        ctx.globalAlpha = 1;
+      }
+
+      // Draw Yes / No buttons on canvas
+      if (state === 'win' && btnYes.visible) {
+        // Yes button
+        const yGrad = ctx.createLinearGradient(btnYes.x, btnYes.y, btnYes.x, btnYes.y + btnYes.h);
+        yGrad.addColorStop(0, '#ff6688');
+        yGrad.addColorStop(1, '#ff3355');
+        ctx.fillStyle = yGrad;
+        roundRect(ctx, btnYes.x, btnYes.y, btnYes.w, btnYes.h, 25);
+        ctx.fill();
+        ctx.strokeStyle = '#cc2244';
+        ctx.lineWidth = 2;
+        roundRect(ctx, btnYes.x, btnYes.y, btnYes.w, btnYes.h, 25);
+        ctx.stroke();
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 22px "Segoe UI", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Sí!', btnYes.x + btnYes.w / 2, btnYes.y + btnYes.h / 2 + 8);
+
+        // No button
+        const nGrad = ctx.createLinearGradient(btnNo.x, btnNo.y, btnNo.x, btnNo.y + btnNo.h);
+        nGrad.addColorStop(0, '#ccc');
+        nGrad.addColorStop(1, '#999');
+        ctx.fillStyle = nGrad;
+        roundRect(ctx, btnNo.x, btnNo.y, btnNo.w, btnNo.h, 25);
+        ctx.fill();
+        ctx.strokeStyle = '#777';
+        ctx.lineWidth = 2;
+        roundRect(ctx, btnNo.x, btnNo.y, btnNo.w, btnNo.h, 25);
+        ctx.stroke();
+        ctx.fillStyle = '#555';
+        ctx.font = 'bold 22px "Segoe UI", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('No', btnNo.x + btnNo.w / 2, btnNo.y + btnNo.h / 2 + 8);
+      }
+
+      // Celebrate screen
+      if (state === 'celebrate') {
+        ctx.fillStyle = '#cc2244';
+        ctx.font = 'bold 28px "Segoe UI", sans-serif';
+        ctx.textAlign = 'center';
+        const pulse = 1 + Math.sin(celebrateTimer * 0.08) * 0.05;
+        ctx.save();
+        ctx.translate(W / 2, H / 2 + 60);
+        ctx.scale(pulse, pulse);
+        ctx.fillText('Te quiero patatita!', 0, 0);
+        ctx.restore();
+      }
+    }
+
+    function roundRect(ctx, x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.lineTo(x + w - r, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+      ctx.lineTo(x + w, y + h - r);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      ctx.lineTo(x + r, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+      ctx.lineTo(x, y + r);
+      ctx.quadraticCurveTo(x, y, x + r, y);
+      ctx.closePath();
+    }
+
+    // ---- Mouse tracking (for fleeing No button) ----
+    function getCanvasPos(e) {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = W / rect.width;
+      const scaleY = H / rect.height;
+      return {
+        x: (e.clientX - rect.left) * scaleX,
+        y: (e.clientY - rect.top) * scaleY,
+      };
+    }
+
+    canvas.addEventListener('mousemove', (e) => {
+      const pos = getCanvasPos(e);
+      mouseX = pos.x;
+      mouseY = pos.y;
+    });
+
+    canvas.addEventListener('mouseleave', () => {
+      mouseX = -999;
+      mouseY = -999;
+    });
+
+    // ---- Input ----
+    function isInsideBtn(btn, x, y) {
+      return x >= btn.x && x <= btn.x + btn.w && y >= btn.y && y <= btn.y + btn.h;
+    }
+
+    function handleClick(e) {
+      const pos = getCanvasPos(e);
+
+      // Check Yes button
+      if (state === 'win' && btnYes.visible && isInsideBtn(btnYes, pos.x, pos.y)) {
+        state = 'celebrate';
+        celebrateTimer = 0;
+        btnYes.visible = false;
+        btnNo.visible = false;
+        // Big burst of hearts
+        for (let i = 0; i < 8; i++) {
+          spawnHearts(rand(50, W - 50), rand(50, H / 2), 3);
+        }
+        spawnParticles(W / 2, H / 2 - 40, 20, '#FFD700');
+        return;
+      }
+
+      // Don't handle jump if buttons are showing
+      if (state === 'win' && buttonsShown) return;
+
+      handleJump();
+    }
+
+    function handleJump() {
+      if (state === 'start') {
+        state = 'playing';
+        potato.vy = JUMP_FORCE;
+      } else if (state === 'playing' || state === 'cruise') {
+        potato.vy = JUMP_FORCE;
+        spawnParticles(potato.x - 10, potato.y + 15, 3, '#f5d98e');
+      } else if (state === 'lose') {
+        init();
+        state = 'start';
+      }
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (e.code === 'Space' || e.code === 'ArrowUp') {
+        e.preventDefault();
+        if (state === 'win' && buttonsShown) return;
+        handleJump();
+      }
+    });
+
+    canvas.addEventListener('click', handleClick);
+    canvas.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      // Update mouse pos for touch
+      const touch = e.touches[0];
+      const pos = getCanvasPos(touch);
+      mouseX = pos.x;
+      mouseY = pos.y;
+      handleClick(touch);
+    });
+
+    // ---- Game Loop ----
+    function gameLoop() {
+      update();
+      draw();
+      requestAnimationFrame(gameLoop);
+    }
+
+    // Start
+    init();
+    gameLoop();
+  </script>
+</body>
+</html>
